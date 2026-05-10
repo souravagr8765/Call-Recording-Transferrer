@@ -47,7 +47,7 @@ PROCESSED_DB         = Path(__file__).parent / "processed.json"
 
 i=0
 for remote in GDRIVE_REMOTES:
-    GDRIVE_REMOTES[i] = "gdrive" + GDRIVE_REMOTES[i].split("@")[1]
+    GDRIVE_REMOTES[i] = "gdrive" + GDRIVE_REMOTES[i].split("@")[0]
     i += 1
 
 
