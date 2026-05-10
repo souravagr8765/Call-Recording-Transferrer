@@ -38,16 +38,18 @@ with open(CONFIG_PATH, "r") as f:
 RECORDING_FOLDERS    = CONFIG.get("recording_folders", [])
 AUDIO_FORMATS        = set(CONFIG.get("audio_formats", []))
 GDRIVE_REMOTES       = CONFIG.get("gdrive_remotes", [])
+GDRIVE_UPLOAD_FOLDER = CONFIG.get("gdrive_upload_folder", "CallRecordings")
+GDRIVE_MAX_PCT       = CONFIG.get("gdrive_max_usage_percent", 90)
+TEMP_FOLDER          = Path(CONFIG.get("temp_folder", "/tmp/call_manager_temp"))
+LOG_FILE             = Path(CONFIG.get("log_file", "/tmp/call_manager.log"))
+PROCESSED_DB         = Path(__file__).parent / "processed.json"
+
 
 i=0
 for remote in GDRIVE_REMOTES:
     GDRIVE_REMOTES[i] = "gdrive" + GDRIVE_REMOTES[i].split("@")[1]
     i += 1
 
-GDRIVE_UPLOAD_FOLDER = CONFIG.get("gdrive_upload_folder", "CallRecordings")
-GDRIVE_MAX_PCT       = CONFIG.get("gdrive_max_usage_percent", 90)
-TEMP_FOLDER          = Path(CONFIG.get("temp_folder", "/tmp/call_manager_temp"))
-LOG_FILE             = Path(CONFIG.get("log_file", "/tmp/call_manager.log"))
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -60,6 +62,53 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger(__name__)
+
+# ── Processed files tracker ──────────────────────────────────────────────────
+def load_processed() -> dict:
+    """
+    Load the processed files database from disk.
+    Structure:
+    {
+      "filename.mp3": {
+        "processed_at": "2024-01-15T10:30:00",
+        "uploaded_to": "gdrive1",
+        "compressed_as": "filename.opus"   # or null if compression failed
+      },
+      ...
+    }
+    """
+    if PROCESSED_DB.exists():
+        try:
+            with open(PROCESSED_DB, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            log.warning(f"Could not read processed.json, starting fresh: {e}")
+    return {}
+
+
+def save_processed(db: dict) -> None:
+    """Persist the processed files database to disk."""
+    try:
+        with open(PROCESSED_DB, "w") as f:
+            json.dump(db, f, indent=2)
+    except Exception as e:
+        log.error(f"Failed to save processed.json: {e}")
+
+
+def mark_processed(db: dict, filename: str, remote: str, compressed_as: str | None) -> None:
+    """Add a file to the processed database and save immediately."""
+    db[filename] = {
+        "processed_at":  datetime.now().isoformat(),
+        "uploaded_to":   remote,
+        "compressed_as": compressed_as,
+    }
+    save_processed(db)
+
+
+def is_processed(db: dict, filename: str) -> bool:
+    """Return True if this filename has already been fully processed."""
+    return filename in db
+
 
 # ── Compression format map ────────────────────────────────────────────────────
 # Best lossless-equivalent compression targets per input format.
@@ -255,9 +304,10 @@ def replace_with_compressed(original: Path, compressed: Path) -> bool:
 
 
 # ── Main workflow ─────────────────────────────────────────────────────────────
-def collect_recordings() -> list[Path]:
-    """Find all audio files in configured folders."""
+def collect_recordings(processed_db: dict) -> list[Path]:
+    """Find all unprocessed audio files in configured folders."""
     files = []
+    skipped = 0
     for folder in RECORDING_FOLDERS:
         p = Path(folder)
         if not p.exists():
@@ -265,8 +315,12 @@ def collect_recordings() -> list[Path]:
             continue
         for f in p.iterdir():
             if f.is_file() and f.suffix.lower() in AUDIO_FORMATS:
-                files.append(f)
-    log.info(f"Found {len(files)} recording(s) to process.")
+                if is_processed(processed_db, f.name):
+                    skipped += 1
+                    log.debug(f"Skipping already-processed: {f.name}")
+                else:
+                    files.append(f)
+    log.info(f"Found {len(files)} new recording(s) to process ({skipped} already processed, skipped).")
     return files
 
 
@@ -278,6 +332,7 @@ def run() -> None:
     summary = {
         "started_at":       start_time.isoformat(),
         "files_found":      0,
+        "skipped":          0,
         "uploaded":         [],
         "upload_failed":    [],
         "compressed":       [],
@@ -287,8 +342,15 @@ def run() -> None:
         "halt_reason":      "",
     }
 
-    recordings = collect_recordings()
+    processed_db = load_processed()
+    all_recordings_count = sum(
+        1 for folder in RECORDING_FOLDERS
+        for f in (Path(folder).iterdir() if Path(folder).exists() else [])
+        if f.is_file() and f.suffix.lower() in AUDIO_FORMATS
+    )
+    recordings = collect_recordings(processed_db)
     summary["files_found"] = len(recordings)
+    summary["skipped"]     = all_recordings_count - len(recordings)
 
     if not recordings:
         log.info("No recordings to process. Exiting.")
@@ -352,6 +414,8 @@ def run() -> None:
                     f"The original uncompressed file remains on your phone."
                 )
             )
+            # Still mark as processed (upload succeeded) so we don't re-upload next run
+            mark_processed(processed_db, rec.name, active_remote, compressed_as=None)
             continue
 
         # ── Step 4: Replace original with compressed ──
@@ -361,8 +425,10 @@ def run() -> None:
                 "original": rec.name,
                 "compressed": compressed.name,
             })
+            mark_processed(processed_db, rec.name, active_remote, compressed_as=compressed.name)
         else:
             summary["compress_failed"].append(rec.name)
+            mark_processed(processed_db, rec.name, active_remote, compressed_as=None)
 
     # Cleanup temp folder
     if TEMP_FOLDER.exists():
@@ -385,7 +451,8 @@ def send_summary_email(summary: dict) -> None:
         f"Finished: {end.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Duration: {str(dur).split('.')[0]}",
         "",
-        f"Files found       : {summary['files_found']}",
+        f"Files found       : {summary['files_found']} new",
+        f"Skipped           : {summary['skipped']} (already processed)",
         f"Uploaded          : {len(summary['uploaded'])}",
         f"Upload failures   : {len(summary['upload_failed'])}",
         f"Compressed        : {len(summary['compressed'])}",
