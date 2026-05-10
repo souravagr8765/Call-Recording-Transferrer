@@ -38,6 +38,12 @@ with open(CONFIG_PATH, "r") as f:
 RECORDING_FOLDERS    = CONFIG.get("recording_folders", [])
 AUDIO_FORMATS        = set(CONFIG.get("audio_formats", []))
 GDRIVE_REMOTES       = CONFIG.get("gdrive_remotes", [])
+
+i=0
+for remote in GDRIVE_REMOTES:
+    GDRIVE_REMOTES[i] = "gdrive" + GDRIVE_REMOTES[i].split("@")[1]
+    i += 1
+
 GDRIVE_UPLOAD_FOLDER = CONFIG.get("gdrive_upload_folder", "CallRecordings")
 GDRIVE_MAX_PCT       = CONFIG.get("gdrive_max_usage_percent", 90)
 TEMP_FOLDER          = Path(CONFIG.get("temp_folder", "/tmp/call_manager_temp"))
