@@ -1,0 +1,46 @@
+# ============================================================
+# Call Recording Manager - Configuration File
+# ============================================================
+
+# --- Recording Source Folders ---
+recording_folders:
+  - /sdcard/Recordings/Call
+  - /sdcard/MIUI/sound_recorder/call_rec
+  # Add more folders as needed
+
+# --- Supported Audio Formats to Process ---
+audio_formats:
+  - .mp3
+  - .m4a
+  - .aac
+  - .wav
+  - .3gp
+  - .ogg
+  - .opus
+  - .amr
+  - .flac
+
+# --- Google Drive Remotes (rclone remote names) ---
+# These must be configured in rclone beforehand
+# The script will use them in order, switching when one hits 90%
+gdrive_remotes:
+  - gdrive1
+  - gdrive2
+  # Add more remotes as needed
+
+# Remote folder path where recordings will be uploaded
+gdrive_upload_folder: CallRecordings
+
+# Maximum drive usage threshold (%) before switching to next account
+gdrive_max_usage_percent: 90
+
+# --- Scheduling ---
+# Interval in hours between each run (used by Termux Job Scheduler)
+schedule_interval_hours: 2
+
+# --- Local Storage ---
+# Temporary folder for processing (within Termux home)
+temp_folder: /data/data/com.termux/files/home/call_manager_temp
+
+# Log file location
+log_file: /data/data/com.termux/files/home/call_manager/call_manager.log
